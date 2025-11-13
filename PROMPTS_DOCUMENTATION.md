@@ -699,3 +699,197 @@ Based on the above, please provide an answer to the following user task:
 ```
 
 ---
+
+## Специализированные промты
+
+### Helium Web Browser Instructions
+
+**Назначение**: Специальные инструкции для агента при работе с веб-браузером через библиотеку Helium. Объясняют как взаимодействовать с веб-страницами, кликать элементы, скроллить, закрывать попапы и т.д.
+
+**Файл источник**: `src/smolagents/vision_web_browser.py`, строки 160-214, переменная `helium_instructions`
+
+**Используется в**: Веб-агентах для навигации по веб-сайтам
+
+**Промт**:
+```python
+Use your web_search tool when you want to get Google search results.
+Then you can use helium to access websites. Don't use helium for Google search, only for navigating websites!
+Don't bother about the helium driver, it's already managed.
+We've already ran "from helium import *"
+Then you can go to pages!
+<code>
+go_to('github.com/trending')
+</code>
+
+You can directly click clickable elements by inputting the text that appears on them.
+<code>
+click("Top products")
+</code>
+
+If it's a link:
+<code>
+click(Link("Top products"))
+</code>
+
+If you try to interact with an element and it's not found, you'll get a LookupError.
+In general stop your action after each button click to see what happens on your screenshot.
+Never try to login in a page.
+
+To scroll up or down, use scroll_down or scroll_up with as an argument the number of pixels to scroll from.
+<code>
+scroll_down(num_pixels=1200) # This will scroll one viewport down
+</code>
+
+When you have pop-ups with a cross icon to close, don't try to click the close icon by finding its element or targeting an 'X' element (this most often fails).
+Just use your built-in tool `close_popups` to close them:
+<code>
+close_popups()
+</code>
+
+You can use .exists() to check for the existence of an element. For example:
+<code>
+if Text('Accept cookies?').exists():
+    click('I accept')
+</code>
+
+Proceed in several steps rather than trying to solve the task in one shot.
+And at the end, only when you have your answer, return your final answer.
+<code>
+final_answer("YOUR_ANSWER_HERE")
+</code>
+
+If pages seem stuck on loading, you might have to wait, for instance `import time` and run `time.sleep(5.0)`. But don't overuse this!
+To list elements on page, DO NOT try code-based element searches like 'contributors = find_all(S("ol > li"))': just look at the latest screenshot you have and read it visually, or use your tool search_item_ctrl_f.
+Of course, you can act on buttons like a user would do when navigating.
+After each code blob you write, you will be automatically provided with an updated screenshot of the browser and the current browser url.
+But beware that the screenshot will only be taken at the end of the whole action, it won't see intermediate states.
+Don't kill the browser.
+When you have modals or cookie banners on screen, you should get rid of them before you can click anything else.
+```
+
+**Особенности**:
+- Предоставляет практические примеры взаимодействия с веб-элементами
+- Предупреждает о типичных ошибках (не пытаться логиниться, не кликать по 'X' напрямую)
+- Описывает работу со скриншотами и асинхронным обновлением UI
+
+---
+
+## Динамически генерируемые промты
+
+Эти промты генерируются программно во время выполнения на основе конфигурации инструментов.
+
+### Tool Code Prompt (для CodeAgent)
+
+**Назначение**: Генерирует описание инструмента в формате Python функции для использования в CodeAgent. Создается методом `to_code_prompt()` класса `Tool`.
+
+**Файл источник**: `src/smolagents/tools.py`, строки 258-287, метод `to_code_prompt()`
+
+**Формат вывода**:
+```python
+def tool_name(arg1: type1, arg2: type2) -> return_type:
+    """Tool description.
+
+    Args:
+        arg1: Description of arg1
+        arg2: Description of arg2
+
+    Returns:
+        return_type: Description of return value
+        [Для инструментов с JSON schema:]
+        dict (structured output): This tool ALWAYS returns a dictionary that strictly adheres to the following JSON schema:
+        {
+            "field1": "type1",
+            "field2": "type2"
+        }
+    """
+```
+
+**Особенности генерации**:
+- Для инструментов **с JSON output schema**:
+  - Тип возврата указывается как `dict`
+  - Добавляется важное примечание о структурированном выводе
+  - Включается полная JSON схема с отступами
+  - Указывается, что можно напрямую обращаться к полям без print()
+- Для инструментов **без JSON schema**:
+  - Используется оригинальный `output_type` инструмента
+  - Формат вывода непредсказуем, требуется осторожность при чейнинге
+
+**Пример сгенерированного промта для инструмента с JSON schema**:
+```python
+def web_search(query: str) -> dict:
+    """Search the web for information about a query.
+
+    Important: This tool returns structured output! Use the JSON schema below to directly access fields like result['field_name']. NO print() statements needed to inspect the output!
+
+    Args:
+        query: The search query string
+
+    Returns:
+        dict (structured output): This tool ALWAYS returns a dictionary that strictly adheres to the following JSON schema:
+        {
+            "results": "array",
+            "total_count": "integer"
+        }
+    """
+```
+
+### Tool Calling Prompt (для ToolCallingAgent)
+
+**Назначение**: Генерирует краткое описание инструмента для ToolCallingAgent в формате "name: description, inputs, output".
+
+**Файл источник**: `src/smolagents/tools.py`, строка 289-290, метод `to_tool_calling_prompt()`
+
+**Формат вывода**:
+```
+tool_name: Tool description text here
+    Takes inputs: {"arg1": {"type": "string", "description": "..."}, "arg2": {...}}
+    Returns an output of type: string
+```
+
+**Пример**:
+```
+web_search: Search the web for information
+    Takes inputs: {"query": {"type": "string", "description": "Search query"}}
+    Returns an output of type: string
+```
+
+---
+
+## Сводная таблица промтов
+
+| Категория | Промт | Файл | Агенты |
+|-----------|-------|------|--------|
+| **Системные** | CodeAgent system_prompt | code_agent.yaml | CodeAgent |
+| | StructuredCodeAgent system_prompt | structured_code_agent.yaml | CodeAgent (structured) |
+| | ToolCallingAgent system_prompt | toolcalling_agent.yaml | ToolCallingAgent |
+| **Планирование** | initial_plan | *.yaml (planning) | Все |
+| | update_plan_pre_messages | *.yaml (planning) | Все |
+| | update_plan_post_messages | *.yaml (planning) | Все |
+| **Управляемые агенты** | managed_agent.task | *.yaml | Все |
+| | managed_agent.report | *.yaml | Все |
+| **Финальный ответ** | final_answer.pre_messages | *.yaml | Все |
+| | final_answer.post_messages | *.yaml | Все |
+| **Специализированные** | helium_instructions | vision_web_browser.py | Веб-агенты |
+| **Динамические** | Tool code prompt | tools.py (to_code_prompt) | CodeAgent |
+| | Tool calling prompt | tools.py (to_tool_calling_prompt) | ToolCallingAgent |
+
+---
+
+## Заключение
+
+Система промтов smolagents построена модульно и иерархически:
+
+1. **Базовый уровень**: Системные промты определяют основное поведение агента (Thought-Code-Observation или Action-Observation)
+
+2. **Уровень планирования**: Промты для структурированного анализа задач и создания планов выполнения
+
+3. **Уровень коллаборации**: Промты для взаимодействия с управляемыми агентами (делегирование подзадач)
+
+4. **Уровень обработки ошибок**: Промты для генерации финального ответа когда агент застрял
+
+5. **Специализированный уровень**: Промты для специфических доменов (веб-навигация, работа с файлами и т.д.)
+
+6. **Динамический уровень**: Промты, генерируемые на основе доступных инструментов и их схем
+
+Все промты используют **Jinja2 шаблонизацию** для гибкой подстановки переменных и поддерживают **кастомизацию** через параметр `custom_instructions`.
+
