@@ -502,3 +502,200 @@ Now Begin!
 ```
 
 ---
+
+## Промты планирования
+
+Промты планирования используются когда агент работает в режиме с планированием (`planning_interval > 0`). Они помогают агенту структурировать подход к решению задачи.
+
+### Initial Plan (Начальный план)
+
+**Назначение**: Промт для создания начального плана решения задачи. Агент анализирует задачу, определяет известные и неизвестные факты, и создает пошаговый план.
+
+**Файл источник**: Секция `planning.initial_plan` в YAML файлах всех агентов
+
+**Переменные**:
+- `{{task}}` - текст задачи
+- `{{tools}}` - список доступных инструментов
+- `{{managed_agents}}` - список управляемых агентов (опционально)
+
+**Промт** (общий для всех типов агентов):
+```
+You are a world expert at analyzing a situation to derive facts, and plan accordingly towards solving a task.
+Below I will present you a task. You will need to 1. build a survey of facts known or needed to solve the task, then 2. make a plan of action to solve the task.
+
+## 1. Facts survey
+You will build a comprehensive preparatory survey of which facts we have at our disposal and which ones we still need.
+These "facts" will typically be specific names, dates, values, etc. Your answer should use the below headings:
+### 1.1. Facts given in the task
+List here the specific facts given in the task that could help you (there might be nothing here).
+
+### 1.2. Facts to look up
+List here any facts that we may need to look up.
+Also list where to find each of these, for instance a website, a file... - maybe the task contains some sources that you should re-use here.
+
+### 1.3. Facts to derive
+List here anything that we want to derive from the above by logical reasoning, for instance computation or simulation.
+
+Don't make any assumptions. For each item, provide a thorough reasoning. Do not add anything else on top of three headings above.
+
+## 2. Plan
+Then for the given task, develop a step-by-step high-level plan taking into account the above inputs and list of facts.
+This plan should involve individual tasks based on the available tools, that if executed correctly will yield the correct answer.
+Do not skip steps, do not add any superfluous steps. Only write the high-level plan, DO NOT DETAIL INDIVIDUAL TOOL CALLS.
+After writing the final step of the plan, write the '<end_plan>' tag and stop there.
+
+You can leverage these tools:
+[список инструментов вставляется динамически]
+
+---
+Now begin! Here is your task:
+```
+{{task}}
+```
+First in part 1, write the facts survey, then in part 2, write your plan.
+```
+
+### Update Plan Pre-Messages
+
+**Назначение**: Промт, предшествующий обновлению плана. Показывает агенту историю предыдущих попыток решения задачи.
+
+**Файл источник**: Секция `planning.update_plan_pre_messages` в YAML файлах
+
+**Переменные**:
+- `{{task}}` - текст задачи
+
+**Промт**:
+```
+You are a world expert at analyzing a situation, and plan accordingly towards solving a task.
+You have been given the following task:
+```
+{{task}}
+```
+
+Below you will find a history of attempts made to solve this task.
+You will first have to produce a survey of known and unknown facts, then propose a step-by-step high-level plan to solve the task.
+If the previous tries so far have met some success, your updated plan can build on these results.
+If you are stalled, you can make a completely new plan starting from scratch.
+
+Find the task and history below:
+```
+
+### Update Plan Post-Messages
+
+**Назначение**: Промт для создания обновленного плана после неудачных попыток. Учитывает уже полученную информацию и оставшееся количество шагов.
+
+**Файл источник**: Секция `planning.update_plan_post_messages` в YAML файлах
+
+**Переменные**:
+- `{remaining_steps}` - количество оставшихся шагов
+- `{{tools}}` - список доступных инструментов
+- `{{managed_agents}}` - список управляемых агентов (опционально)
+
+**Промт**:
+```
+Now write your updated facts below, taking into account the above history:
+## 1. Updated facts survey
+### 1.1. Facts given in the task
+### 1.2. Facts that we have learned
+### 1.3. Facts still to look up
+### 1.4. Facts still to derive
+
+Then write a step-by-step high-level plan to solve the task above.
+## 2. Plan
+### 2. 1. ...
+Etc.
+This plan should involve individual tasks based on the available tools, that if executed correctly will yield the correct answer.
+Beware that you have {remaining_steps} steps remaining.
+Do not skip steps, do not add any superfluous steps. Only write the high-level plan, DO NOT DETAIL INDIVIDUAL TOOL CALLS.
+After writing the final step of the plan, write the '<end_plan>' tag and stop there.
+
+You can leverage these tools:
+[список инструментов вставляется динамически]
+
+Now write your new plan below.
+```
+
+---
+
+## Промты для управляемых агентов
+
+Управляемые агенты (Managed Agents) - это агенты, которых может вызывать основной агент для выполнения подзадач.
+
+### Managed Agent Task
+
+**Назначение**: Промт для передачи задачи управляемому агенту. Определяет формат ответа, который должен предоставить подчиненный агент.
+
+**Файл источник**: Секция `managed_agent.task` во всех YAML файлах
+
+**Переменные**:
+- `{{name}}` - имя управляемого агента
+- `{{task}}` - задача для выполнения
+
+**Промт**:
+```
+You're a helpful agent named '{{name}}'.
+You have been submitted this task by your manager.
+---
+Task:
+{{task}}
+---
+You're helping your manager solve a wider task: so make sure to not provide a one-line answer, but give as much information as possible to give them a clear understanding of the answer.
+
+Your final_answer WILL HAVE to contain these parts:
+### 1. Task outcome (short version):
+### 2. Task outcome (extremely detailed version):
+### 3. Additional context (if relevant):
+
+Put all these in your final_answer tool, everything that you do not pass as an argument to final_answer will be lost.
+And even if your task resolution is not successful, please return as much context as possible, so that your manager can act upon this feedback.
+```
+
+### Managed Agent Report
+
+**Назначение**: Промт для форматирования отчета от управляемого агента обратно к основному агенту.
+
+**Файл источник**: Секция `managed_agent.report` во всех YAML файлах
+
+**Переменные**:
+- `{{name}}` - имя управляемого агента
+- `{{final_answer}}` - финальный ответ от агента
+
+**Промт**:
+```
+Here is the final answer from your managed agent '{{name}}':
+{{final_answer}}
+```
+
+---
+
+## Промты финального ответа
+
+Эти промты используются когда агент не смог решить задачу самостоятельно и нужно сгенерировать ответ на основе собранной информации.
+
+### Final Answer Pre-Messages
+
+**Назначение**: Промт, предшествующий генерации финального ответа. Указывает, что первоначальный агент застрял.
+
+**Файл источник**: Секция `final_answer.pre_messages` во всех YAML файлах
+
+**Промт**:
+```
+An agent tried to answer a user query but it got stuck and failed to do so. You are tasked with providing an answer instead. Here is the agent's memory:
+```
+
+### Final Answer Post-Messages
+
+**Назначение**: Промт для запроса финального ответа на основе памяти агента.
+
+**Файл источник**: Секция `final_answer.post_messages` во всех YAML файлах
+
+**Переменные**:
+- `{{task}}` - текст задачи
+
+**Промт**:
+```
+Based on the above, please provide an answer to the following user task:
+{{task}}
+```
+
+---
