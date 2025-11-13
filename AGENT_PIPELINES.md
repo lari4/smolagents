@@ -202,3 +202,255 @@ RunResult {
 ```
 
 ---
+
+## Пайплайн CodeAgent
+
+CodeAgent решает задачи через генерацию и выполнение Python кода. Использует цикл Thought → Code → Observation.
+
+### Диаграмма потока CodeAgent._step_stream()
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│              _step_stream(action_step) - CodeAgent               │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ЭТАП 1: ПОДГОТОВКА СООБЩЕНИЙ ДЛЯ LLM                           │
+│  ┌────────────────────────────────────────────────────────┐     │
+│  │ memory_messages = write_memory_to_messages()           │     │
+│  │                                                        │     │
+│  │ Преобразование memory.steps → ChatMessage[]           │     │
+│  │ [SystemPromptStep] → ChatMessage(SYSTEM, system_prompt)│     │
+│  │ [TaskStep]         → ChatMessage(USER, task)          │     │
+│  │ [ActionStep]       → ChatMessage(ASSISTANT, thought+code) │  │
+│  │                      ChatMessage(USER, "Observation: output")│
+│  │ [PlanningStep]     → ChatMessage(USER, plan)          │     │
+│  │                                                        │     │
+│  │ memory_step.model_input_messages = messages            │     │
+│  └────────────────────────────────────────────────────────┘     │
+│                         │                                       │
+│                         ▼                                       │
+│  ЭТАП 2: ГЕНЕРАЦИЯ ВЫВОДА ОТ LLM                                │
+│  ┌────────────────────────────────────────────────────────┐     │
+│  │ ПРОМТ: system_prompt из code_agent.yaml               │     │
+│  │ (содержит примеры Thought/Code/Observation)           │     │
+│  │                                                        │     │
+│  │ Переменные в промте:                                  │     │
+│  │ - {{tools}}: сгенерированные описания через          │     │
+│  │              tool.to_code_prompt()                    │     │
+│  │ - {{authorized_imports}}: список разрешенных модулей │     │
+│  │ - {{code_block_opening_tag}}: "```py" или "```python"│     │
+│  │ - {{code_block_closing_tag}}: "```"                  │     │
+│  │                                                        │     │
+│  │ if stream_outputs:                                    │     │
+│  │   for event in model.generate_stream(messages):       │     │
+│  │     Yield ChatMessageStreamDelta                      │     │
+│  │   chat_message = agglomerate_deltas()                 │     │
+│  │ else:                                                 │     │
+│  │   chat_message = model.generate(messages)            │     │
+│  │                                                        │     │
+│  │ memory_step.model_output = chat_message.content       │     │
+│  │ memory_step.token_usage = chat_message.token_usage   │     │
+│  └────────────────────────────────────────────────────────┘     │
+│                         │                                       │
+│                         ▼                                       │
+│  ЭТАП 3: ПАРСИНГ КОДА ИЗ ВЫВОДА                                │
+│  ┌────────────────────────────────────────────────────────┐     │
+│  │ code_blobs = parse_code_blobs(                        │     │
+│  │   chat_message.content,                               │     │
+│  │   code_block_opening_tag,                             │     │
+│  │   code_block_closing_tag                              │     │
+│  │ )                                                      │     │
+│  │                                                        │     │
+│  │ if not code_blobs:                                    │     │
+│  │   raise AgentParsingError(                            │     │
+│  │     "No code found in output"                         │     │
+│  │   )                                                    │     │
+│  │                                                        │     │
+│  │ code_to_execute = "\n".join(code_blobs)               │     │
+│  │ memory_step.code = code_to_execute                    │     │
+│  └────────────────────────────────────────────────────────┘     │
+│                         │                                       │
+│                         ▼                                       │
+│  ЭТАП 4: ВЫПОЛНЕНИЕ КОДА ЧЕРЕЗ PythonExecutor                  │
+│  ┌────────────────────────────────────────────────────────┐     │
+│  │ result = python_executor(code_to_execute)             │     │
+│  │                                                        │     │
+│  │ PythonExecutor:                                       │     │
+│  │ ├─ Имеет персистентное состояние (self.state)        │     │
+│  │ ├─ Содержит инструменты как функции                  │     │
+│  │ ├─ Выполняет exec(code, state)                        │     │
+│  │ ├─ Перехватывает print() → observations              │     │
+│  │ ├─ Перехватывает final_answer() → is_final_answer    │     │
+│  │ └─ Применяет authorized_imports                       │     │
+│  │                                                        │     │
+│  │ if "final_answer" вызвана:                            │     │
+│  │   is_final_answer = True                              │     │
+│  │   output = результат final_answer                     │     │
+│  │ else:                                                 │     │
+│  │   is_final_answer = False                             │     │
+│  │   output = observations (все print())                 │     │
+│  │                                                        │     │
+│  │ memory_step.observations = output                     │     │
+│  │                                                        │     │
+│  │ Yield ActionOutput(                                   │     │
+│  │   output=output,                                      │     │
+│  │   is_final_answer=is_final_answer                     │     │
+│  │ )                                                      │     │
+│  └────────────────────────────────────────────────────────┘     │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Пример выполнения CodeAgent
+
+**Задача**: "What is 15 multiplied by 7?"
+
+**Шаг 1: Инициализация**
+```
+memory.steps = [
+  SystemPromptStep(system_prompt),
+  TaskStep("What is 15 multiplied by 7?")
+]
+```
+
+**Шаг 2: Генерация (step 1)**
+
+Отправляемые сообщения:
+```
+[
+  ChatMessage(SYSTEM, "You are an expert assistant who can solve any task using code blobs..."),
+  ChatMessage(USER, "What is 15 multiplied by 7?")
+]
+```
+
+Ответ LLM:
+```
+Thought: I need to calculate 15 * 7 using Python.
+```py
+result = 15 * 7
+print(result)
+```
+```
+
+Парсинг → `code = "result = 15 * 7\nprint(result)"`
+
+**Шаг 3: Выполнение кода**
+```python
+python_executor.execute("result = 15 * 7\nprint(result)")
+# → observations = "105"
+# → is_final_answer = False
+```
+
+**Шаг 4: Observation добавлена в память**
+```
+memory.steps = [
+  SystemPromptStep(...),
+  TaskStep(...),
+  ActionStep(
+    model_output="Thought: I need...\n```py\n...",
+    code="result = 15 * 7\nprint(result)",
+    observations="105"
+  )
+]
+```
+
+**Шаг 5: Генерация финального ответа (step 2)**
+
+Отправляемые сообщения:
+```
+[
+  ChatMessage(SYSTEM, "..."),
+  ChatMessage(USER, "What is 15 multiplied by 7?"),
+  ChatMessage(ASSISTANT, "Thought: I need...\n```py\n..."),
+  ChatMessage(USER, "Observation: 105")
+]
+```
+
+Ответ LLM:
+```
+Thought: I have the result, let me return it.
+```py
+final_answer(105)
+```
+```
+
+Выполнение → `is_final_answer = True`, `output = 105`
+
+**Финальный результат**: `105`
+
+### StructuredCodeAgent (JSON mode)
+
+При `use_structured_outputs_internally=True`, CodeAgent использует structured outputs:
+
+```
+┌────────────────────────────────────────────────────┐
+│ Генерация в JSON формате:                         │
+│                                                    │
+│ {                                                  │
+│   "thought": "I need to calculate...",            │
+│   "code": "result = 15 * 7\nprint(result)"        │
+│ }                                                  │
+│                                                    │
+│ Промт: structured_code_agent.yaml                 │
+│ Схема JSON:                                       │
+│   {                                                │
+│     "type": "object",                             │
+│     "properties": {                               │
+│       "thought": {"type": "string"},              │
+│       "code": {"type": "string"}                  │
+│     },                                             │
+│     "required": ["thought", "code"]               │
+│   }                                                │
+└────────────────────────────────────────────────────┘
+```
+
+### Используемые промты в CodeAgent
+
+| Этап | Промт | Файл | Переменные |
+|------|-------|------|-----------|
+| Генерация кода | `system_prompt` | code_agent.yaml или structured_code_agent.yaml | `{{tools}}`, `{{authorized_imports}}`, `{{code_block_opening_tag}}`, `{{code_block_closing_tag}}` |
+| Описание инструмента | Динамический | tools.py:to_code_prompt() | Для каждого инструмента |
+
+### Передаваемые данные между этапами
+
+**Из LLM**:
+```python
+{
+  "content": "Thought: ...\n```py\ncode\n```",
+  "token_usage": TokenUsage
+}
+```
+
+**После парсинга**:
+```python
+{
+  "code": "extracted code",
+  "code_blobs": ["blob1", "blob2", ...]
+}
+```
+
+**Из PythonExecutor**:
+```python
+{
+  "observations": "print() outputs",
+  "is_final_answer": bool,
+  "output": Any  # Если final_answer вызван
+}
+```
+
+**В память (ActionStep)**:
+```python
+ActionStep {
+  "step_number": int,
+  "model_input_messages": ChatMessage[],
+  "model_output": str,
+  "model_output_message": ChatMessage,
+  "code": str,
+  "observations": str,
+  "is_final_answer": bool,
+  "token_usage": TokenUsage,
+  "timing": {"start": ..., "end": ...}
+}
+```
+
+---
